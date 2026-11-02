@@ -1,3 +1,4 @@
+import {workflowFor,workflowQuestions} from './workflows.mjs';
 export const ENDPOINT = 'https://api.zoom.us/v2/aiservices/decisions/decide';
 export const choices = [
   {value:'routine',description:'Routine support: supplied evidence indicates no material parcel or item damage.'},
@@ -9,7 +10,9 @@ export const questions = [
   {name:'damage_supported',type:'predicate',instructions:'Does the supplied evidence support material damage to the parcel or its contents? Do not assume unseen details.'},
   {name:'evidence_incomplete',type:'predicate',instructions:'Is the supplied evidence insufficient or contradictory for assessing the condition of the contents? An exterior-only photo does not establish contents condition.'}
 ];
-export function buildRequest({mode,text,image,model='zoom-decisions'}) {
+export function questionsFor(scenario='conflict'){const workflow=workflowFor(scenario);return workflow?workflowQuestions(workflow):questions;}
+export function buildRequest({mode,text,image,model='zoom-decisions',scenario='conflict'}) {
+  const selectedQuestions=questionsFor(scenario);
   if (!['text','image','combined'].includes(mode)) throw new Error('Choose a valid input mode.');
   if (!['zoom-decisions','zoom-decisions-pro'].includes(model)) throw new Error('Choose a supported model.');
   if (mode !== 'image' && (typeof text !== 'string' || !text.trim() || text.length>12000)) throw new Error('Enter 1–12,000 characters of customer text.');
@@ -23,12 +26,13 @@ export function buildRequest({mode,text,image,model='zoom-decisions'}) {
   const content=[];
   if(mode!=='image') content.push({type:'input_text',text:text.trim()});
   if(mode!=='text') content.push({type:'input_image',image_url:image,detail:'auto'});
-  return {model,input:mode==='text'?text.trim():[{role:'user',content}],questions,...(mode!=='text'?{enable_image_input:true}:{})};
+  return {model,input:mode==='text'?text.trim():[{role:'user',content}],questions:selectedQuestions,...(mode!=='text'?{enable_image_input:true}:{})};
 }
-export function normalize(raw) {
+export function normalize(raw,selectedQuestions=questions) {
+  const choices=selectedQuestions.find(q=>q.name==='route').choices;
   if (!raw || !Array.isArray(raw.answers)) throw new Error('Zoom returned an unexpected response format.');
   const probability = p=> typeof p==='number'&&Number.isFinite(p)&&p>=0&&p<=1;
-  for (const question of questions) {
+  for (const question of selectedQuestions) {
     const matches=raw.answers.filter(a=>a.name===question.name);
     if(matches.length!==1) throw new Error('Zoom response has missing or duplicate answers.');
     const a=matches[0];
@@ -41,8 +45,9 @@ export function normalize(raw) {
   const selected=route.type==='choice'?route.probabilities.find(p=>p.value===route.choice).probability:null;
   return {route,selectedProbability:selected,uncertainty:selected===null?null:1-selected,predicates:raw.answers.filter(a=>a.name!=='route')};
 }
-export function sampleResponse(mode,model) {
+export function sampleResponse(mode,model,selectedQuestions=questions) {
+  const choices=selectedQuestions.find(q=>q.name==='route').choices;
   // Fixed teaching fixtures. These do NOT analyze the submitted text or image.
   const p={text:[.68,.27,.05],image:[.04,.27,.69],combined:[.03,.82,.15]}[mode];
-  return {model,answers:[{name:'route',type:'choice',choice:choices[p.indexOf(Math.max(...p))].value,probabilities:choices.map((c,i)=>({value:c.value,probability:p[i]}))},{name:'damage_supported',type:'predicate',probability:{text:.12,image:.91,combined:.89}[mode]},{name:'evidence_incomplete',type:'predicate',probability:{text:.38,image:.88,combined:.94}[mode]}]};
+  return {model,answers:[{name:'route',type:'choice',choice:choices[p.indexOf(Math.max(...p))].value,probabilities:choices.map((c,i)=>({value:c.value,probability:p[i]}))},{name:selectedQuestions[1].name,type:'predicate',probability:{text:.12,image:.91,combined:.89}[mode]},{name:selectedQuestions[2].name,type:'predicate',probability:{text:.38,image:.88,combined:.94}[mode]}]};
 }
