@@ -1,0 +1,11 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {buildRequest,normalize,sampleResponse,questions} from './decisions.mjs';
+const image='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aMioAAAAASUVORK5CYII=';
+test('text does not leak image evidence',()=>{const r=buildRequest({mode:'text',text:'ok',image});assert.equal(r.input,'ok');assert.equal(r.enable_image_input,undefined);});
+test('image-only excludes customer note and opts in',()=>{const r=buildRequest({mode:'image',text:'private note',image});assert.deepEqual(r.input,[{role:'user',content:[{type:'input_image',image_url:image,detail:'auto'}]}]);assert.equal(r.enable_image_input,true);});
+test('combined input uses same questions and both content parts',()=>{const r=buildRequest({mode:'combined',text:'note',image});assert.deepEqual(r.input[0].content.map(x=>x.type),['input_text','input_image']);assert.deepEqual(r.questions,questions);});
+test('reject invalid evidence and unsupported model',()=>{for(const args of [{mode:'text',text:''},{mode:'image',image:'https://example.com/a.png'},{mode:'text',text:'a',model:'imaginary'},{mode:'image',image:'data:image/png;base64,YWJj'}])assert.throws(()=>buildRequest(args));});
+test('normalization computes uncertainty without fabricating confidence',()=>{const raw=sampleResponse('combined','zoom-decisions');const n=normalize(raw);assert.equal(n.selectedProbability,.82);assert.ok(Math.abs(n.uncertainty-.18)<1e-12);assert.equal(raw.answers[0].confidence,undefined);});
+test('refusal remains refusal and independent answers survive',()=>{const raw=sampleResponse('image','zoom-decisions');raw.answers[0]={type:'refusal',name:'route'};const n=normalize(raw);assert.equal(n.selectedProbability,null);assert.equal(n.predicates.length,2);});
+test('malformed distributions and missing answers are rejected',()=>{const raw=sampleResponse('text','zoom-decisions');raw.answers[0].probabilities[0].probability=2;assert.throws(()=>normalize(raw));assert.throws(()=>normalize({answers:[]}));});
